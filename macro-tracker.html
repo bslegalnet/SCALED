@@ -1244,6 +1244,9 @@
             </button>
             <div id="daily-log-history"></div>
             <div id="past-logs-container" style="display: none;"></div>
+            <button class="btn" onclick="saveTodaysLog()" style="margin-top: 16px;">
+                Save Today's Log
+            </button>
         </div>
 
         <!-- Targets Tab -->
@@ -3024,6 +3027,28 @@
         }
 
         // Past Logs Functions
+        function saveTodaysLog() {
+            if (dailyLog.length === 0) {
+                alert('No food logged today! Add some meals first.');
+                return;
+            }
+            
+            const today = new Date().toDateString();
+            
+            // Check if today's log is already saved
+            if (pastLogs[today]) {
+                if (!confirm('Today\'s log is already saved. Do you want to update it?')) {
+                    return;
+                }
+            }
+            
+            // Save today's log to past logs
+            pastLogs[today] = JSON.parse(JSON.stringify(dailyLog)); // Deep copy
+            localStorage.setItem('pastLogs', JSON.stringify(pastLogs));
+            
+            alert('✓ Today\'s log has been saved!');
+        }
+        
         function togglePastLogs() {
             const todayContainer = document.getElementById('daily-log-history');
             const pastContainer = document.getElementById('past-logs-container');
