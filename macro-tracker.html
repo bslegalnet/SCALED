@@ -2832,10 +2832,16 @@
                     );
 
                     const text = result.data.text;
-                    console.log('OCR Text:', text);
+                    console.log('=== OCR RESULTS ===');
+                    console.log('Raw OCR Text:', text);
+                    console.log('==================');
 
                     // Extract nutrition data
                     extractedNutriData = extractNutritionData(text);
+                    
+                    console.log('=== EXTRACTED DATA ===');
+                    console.log('Final extracted data:', extractedNutriData);
+                    console.log('=====================');
 
                     if (extractedNutriData.calories || extractedNutriData.protein || extractedNutriData.carbs || extractedNutriData.fat) {
                         // Show success
@@ -2886,9 +2892,10 @@
                       .replace(/[l]/g, '1')  // Common OCR mistake in numbers
                       .toLowerCase();
 
-            console.log('Cleaned text:', text);
+            console.log('Cleaned text for extraction:', text);
 
             // Extract Calories - more comprehensive patterns
+            // Try to find the nutrition facts section first
             const caloriePatterns = [
                 /calories[:\s]+(\d+)/i,
                 /(\d+)\s*calories/i,
@@ -2896,16 +2903,39 @@
                 /(\d+)\s*kcal/i,
                 /amount\s*per\s*serving[:\s]+(\d+)/i,
                 /cal[:\s]+(\d+)/i,
-                /(\d{2,4})\s*cal\b/i  // 2-4 digit number followed by cal
+                /(\d{2,4})\s*cal\b/i,  // 2-4 digit number followed by cal
+                /calorie[s]?\s*(\d+)/i,
+                /(\d+)\s*calorie/i,
+                // Look for standalone numbers near "nutrition facts" or "amount per serving"
+                /nutrition\s*facts.*?(\d{2,4})/i,
+                /amount\s*per.*?(\d{2,4})/i,
+                // Sometimes calories appear as first number after serving size
+                /serving\s*size.*?calories?\s*(\d+)/i,
+                /serving.*?(\d{2,4})\s*cal/i
             ];
+            
             for (const pattern of caloriePatterns) {
                 const match = text.match(pattern);
                 if (match) {
                     const value = parseInt(match[1]);
-                    // Sanity check: calories typically between 0-2000 per serving
-                    if (value >= 0 && value <= 2000) {
+                    // Sanity check: calories typically between 5-2000 per serving
+                    if (value >= 5 && value <= 2000) {
                         data.calories = value;
+                        console.log('Calories found with pattern:', pattern, 'Value:', value);
                         break;
+                    }
+                }
+            }
+            
+            // If still no calories found, try a more aggressive search
+            // Look for any 2-4 digit number that appears before protein/fat/carbs
+            if (!data.calories) {
+                const aggressiveMatch = text.match(/(\d{2,4})\s*(?=.*protein|.*fat|.*carb)/i);
+                if (aggressiveMatch) {
+                    const value = parseInt(aggressiveMatch[1]);
+                    if (value >= 5 && value <= 2000) {
+                        data.calories = value;
+                        console.log('Calories found with aggressive pattern. Value:', value);
                     }
                 }
             }
