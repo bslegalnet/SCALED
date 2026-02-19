@@ -1416,7 +1416,7 @@
             <button class="modal-close-btn" onclick="closeNutriLabelScanner()">✕</button>
             <h2 class="modal-title">Scan Nutrition Label</h2>
             <div id="nutri-status" style="text-align: center; padding: 12px; background: #F0F9FF; border-radius: 12px; margin-bottom: 16px; color: #0369A1; font-size: 14px;">
-                Take a clear photo of the nutrition facts label
+                📸 Take a clear, well-lit photo of the nutrition facts label. Make sure the text is sharp and readable.
             </div>
             <input type="file" id="nutri-photo-input" accept="image/*" capture="environment" style="display: none;" onchange="processNutriLabel()">
             <button class="btn" onclick="document.getElementById('nutri-photo-input').click()" style="margin-bottom: 16px;">📸 Take Photo</button>
@@ -2744,6 +2744,53 @@
             extractedNutriData = null;
         }
 
+        // Image preprocessing for better OCR accuracy
+        async function preprocessImage(imageDataUrl) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    
+                    // Set canvas size to image size
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    
+                    // Draw original image
+                    ctx.drawImage(img, 0, 0);
+                    
+                    // Get image data
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = imageData.data;
+                    
+                    // Apply grayscale and contrast enhancement
+                    for (let i = 0; i < data.length; i += 4) {
+                        // Convert to grayscale
+                        const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+                        
+                        // Increase contrast (simple threshold)
+                        const contrast = 1.5;
+                        const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+                        const enhanced = factor * (gray - 128) + 128;
+                        
+                        // Apply threshold for better text recognition
+                        const threshold = enhanced > 128 ? 255 : 0;
+                        
+                        data[i] = threshold;     // R
+                        data[i + 1] = threshold; // G
+                        data[i + 2] = threshold; // B
+                    }
+                    
+                    // Put processed image data back
+                    ctx.putImageData(imageData, 0, 0);
+                    
+                    // Return processed image as data URL
+                    resolve(canvas.toDataURL('image/png'));
+                };
+                img.src = imageDataUrl;
+            });
+        }
+
         async function processNutriLabel() {
             const fileInput = document.getElementById('nutri-photo-input');
             const file = fileInput.files[0];
@@ -2762,9 +2809,12 @@
                 document.getElementById('nutri-status').style.color = '#D97706';
 
                 try {
-                    // Use Tesseract.js for OCR
+                    // Preprocess image for better OCR
+                    const preprocessedImage = await preprocessImage(e.target.result);
+                    
+                    // Use Tesseract.js for OCR with optimized settings
                     const result = await Tesseract.recognize(
-                        e.target.result,
+                        preprocessedImage,
                         'eng',
                         {
                             logger: m => {
@@ -2772,7 +2822,9 @@
                                     const progress = Math.round(m.progress * 100);
                                     document.getElementById('nutri-status').textContent = `Analyzing... ${progress}%`;
                                 }
-                            }
+                            },
+                            tessedit_pageseg_mode: Tesseract.PSM.AUTO,
+                            tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,:% ',
                         }
                     );
 
@@ -2823,81 +2875,121 @@
                 sodium: null
             };
 
-            // Clean up text
-            text = text.replace(/\n/g, ' ').replace(/\s+/g, ' ');
+            // Clean up text - normalize spaces and remove special characters
+            text = text.replace(/\n/g, ' ')
+                      .replace(/\s+/g, ' ')
+                      .replace(/[|]/g, ' ')
+                      .replace(/[O]/g, '0')  // Common OCR mistake
+                      .replace(/[l]/g, '1')  // Common OCR mistake in numbers
+                      .toLowerCase();
 
-            // Extract Calories - look for patterns like "Calories 250" or "250 Calories" or "Calories: 250"
+            console.log('Cleaned text:', text);
+
+            // Extract Calories - more comprehensive patterns
             const caloriePatterns = [
                 /calories[:\s]+(\d+)/i,
                 /(\d+)\s*calories/i,
                 /energy[:\s]+(\d+)/i,
-                /(\d+)\s*kcal/i
+                /(\d+)\s*kcal/i,
+                /amount\s*per\s*serving[:\s]+(\d+)/i,
+                /cal[:\s]+(\d+)/i,
+                /(\d{2,4})\s*cal\b/i  // 2-4 digit number followed by cal
             ];
             for (const pattern of caloriePatterns) {
                 const match = text.match(pattern);
                 if (match) {
-                    data.calories = parseInt(match[1]);
-                    break;
+                    const value = parseInt(match[1]);
+                    // Sanity check: calories typically between 0-2000 per serving
+                    if (value >= 0 && value <= 2000) {
+                        data.calories = value;
+                        break;
+                    }
                 }
             }
 
-            // Extract Protein - look for "Protein 10g" or "10g Protein"
+            // Extract Protein - enhanced patterns
             const proteinPatterns = [
                 /protein[:\s]+(\d+\.?\d*)\s*g/i,
                 /(\d+\.?\d*)\s*g\s*protein/i,
-                /protein[:\s]+(\d+\.?\d*)/i
+                /protein[:\s]+(\d+\.?\d*)/i,
+                /protein\s*(\d+\.?\d*)/i,
+                /prot[:\s]+(\d+\.?\d*)/i
             ];
             for (const pattern of proteinPatterns) {
                 const match = text.match(pattern);
                 if (match) {
-                    data.protein = parseFloat(match[1]);
-                    break;
+                    const value = parseFloat(match[1]);
+                    // Sanity check: protein typically 0-100g per serving
+                    if (value >= 0 && value <= 100) {
+                        data.protein = value;
+                        break;
+                    }
                 }
             }
 
-            // Extract Carbs - look for "Total Carbohydrate" or "Carbs"
+            // Extract Carbs - enhanced patterns including variations
             const carbPatterns = [
                 /total\s*carbohydrate[:\s]+(\d+\.?\d*)\s*g/i,
                 /carbohydrate[:\s]+(\d+\.?\d*)\s*g/i,
                 /carbs[:\s]+(\d+\.?\d*)\s*g/i,
-                /(\d+\.?\d*)\s*g\s*carb/i
+                /(\d+\.?\d*)\s*g\s*carb/i,
+                /carbohydrate\s*(\d+\.?\d*)/i,
+                /carbs\s*(\d+\.?\d*)/i,
+                /total\s*carb[:\s]+(\d+\.?\d*)/i
             ];
             for (const pattern of carbPatterns) {
                 const match = text.match(pattern);
                 if (match) {
-                    data.carbs = parseFloat(match[1]);
-                    break;
+                    const value = parseFloat(match[1]);
+                    // Sanity check: carbs typically 0-150g per serving
+                    if (value >= 0 && value <= 150) {
+                        data.carbs = value;
+                        break;
+                    }
                 }
             }
 
-            // Extract Fat - look for "Total Fat"
+            // Extract Fat - enhanced patterns
             const fatPatterns = [
                 /total\s*fat[:\s]+(\d+\.?\d*)\s*g/i,
                 /fat[:\s]+(\d+\.?\d*)\s*g/i,
-                /(\d+\.?\d*)\s*g\s*fat/i
+                /(\d+\.?\d*)\s*g\s*fat/i,
+                /total\s*fat\s*(\d+\.?\d*)/i,
+                /fat\s*(\d+\.?\d*)\s*g/i
             ];
             for (const pattern of fatPatterns) {
                 const match = text.match(pattern);
                 if (match) {
-                    data.fat = parseFloat(match[1]);
-                    break;
+                    const value = parseFloat(match[1]);
+                    // Sanity check: fat typically 0-100g per serving
+                    if (value >= 0 && value <= 100) {
+                        data.fat = value;
+                        break;
+                    }
                 }
             }
 
-            // Extract Sodium - look for "Sodium"
+            // Extract Sodium - enhanced patterns
             const sodiumPatterns = [
                 /sodium[:\s]+(\d+\.?\d*)\s*mg/i,
                 /(\d+\.?\d*)\s*mg\s*sodium/i,
-                /sodium[:\s]+(\d+\.?\d*)/i
+                /sodium[:\s]+(\d+\.?\d*)/i,
+                /sodium\s*(\d+\.?\d*)/i,
+                /sod[:\s]+(\d+\.?\d*)/i
             ];
             for (const pattern of sodiumPatterns) {
                 const match = text.match(pattern);
                 if (match) {
-                    data.sodium = parseFloat(match[1]);
-                    break;
+                    const value = parseFloat(match[1]);
+                    // Sanity check: sodium typically 0-5000mg per serving
+                    if (value >= 0 && value <= 5000) {
+                        data.sodium = value;
+                        break;
+                    }
                 }
             }
 
+            console.log('Extracted data:', data);
             return data;
         }
 
